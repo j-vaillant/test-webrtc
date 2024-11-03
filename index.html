@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC Signaling</title>
+    <style>
+      video {
+        width: 30%;
+        margin: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>WebRTC Signaling Server</h1>
+    <div id="videos"></div>
+    <button id="startCall">Start Call</button>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+      const peers = {}; // Stocker les connexions des pairs
+      const videosContainer = document.getElementById("videos");
+      let localStream;
+      let isLocalStreamAdded = false; // Vérifier si le flux local est déjà ajouté
+
+      const constraints = {
+        video: true,
+        audio: true,
+      };
+
+      // Fonction pour démarrer un appel
+      const startCall = () => {
+        navigator.mediaDevices
+          .getUserMedia(constraints)
+          .then((stream) => {
+            localStream = stream;
+
+            // Afficher le flux local une seule fois
+            if (!isLocalStreamAdded) {
+              const localVideo = document.createElement("video");
+              localVideo.srcObject = stream;
+              localVideo.autoplay = true;
+              localVideo.muted = true; // Muter pour éviter le feedback
+              videosContainer.appendChild(localVideo);
+              isLocalStreamAdded = true; // Marquer que le flux local a été ajouté
+            }
+
+            // Émettre l'événement de démarrage de l'appel
+            socket.emit("start-call");
+          })
+          .catch((error) => {
+            console.error("Error accessing media devices:", error);
+          });
+      };
+
+      // Écouter les nouveaux pairs
+      socket.on("new-peer", (peerId) => {
+        if (!(peerId in peers)) {
+          // Vérifier que ce pair n'est pas déjà enregistré
+          console.log("New peer connected:", peerId);
+          createPeerConnection(peerId);
+        }
+      });
+
+      // Écouter les offres
+      socket.on("offer", (data) => {
+        console.log("Offer received from:", data.from);
+        handleOffer(data);
+      });
+
+      // Écouter les réponses
+      socket.on("answer", (data) => {
+        console.log("Answer received from:", data.from);
+        handleAnswer(data);
+      });
+
+      // Écouter les candidats ICE
+      socket.on("candidate", (data) => {
+        console.log("Candidate received from:", data.from);
+        handleCandidate(data);
+      });
+
+      // Écouter les déconnexions
+      socket.on("peer-disconnected", (peerId) => {
+        console.log("Peer disconnected:", peerId);
+        // Supprimer la vidéo de l'utilisateur déconnecté
+        const remoteVideo = document.getElementById(peerId);
+        if (remoteVideo) {
+          remoteVideo.remove(); // Enlève l'élément vidéo du DOM
+        }
+        delete peers[peerId]; // Supprime la connexion du pair
+      });
+
+      // Fonction pour créer une connexion avec un autre pair
+      const createPeerConnection = (peerId) => {
+        console.log("Creating peer connection with:", peerId);
+        const peerConnection = new RTCPeerConnection();
+
+        // Ajouter le flux local
+        localStream
+          .getTracks()
+          .forEach((track) => peerConnection.addTrack(track, localStream));
+
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log("Sending candidate to:", peerId);
+            socket.emit("candidate", {
+              candidate: event.candidate,
+              to: peerId,
+            });
+          }
+        };
+
+        peerConnection.ontrack = (event) => {
+          // Vérifier si la vidéo existe déjà pour éviter les doublons
+          if (!document.getElementById(peerId)) {
+            const remoteVideo = document.createElement("video");
+            remoteVideo.srcObject = event.streams[0];
+            remoteVideo.autoplay = true;
+            remoteVideo.id = peerId; // ID unique pour chaque vidéo
+            videosContainer.appendChild(remoteVideo);
+          }
+        };
+
+        peers[peerId] = peerConnection;
+
+        // Créer une offre pour ce pair
+        peerConnection
+          .createOffer()
+          .then((offer) => {
+            return peerConnection.setLocalDescription(offer);
+          })
+          .then(() => {
+            console.log("Sending offer to:", peerId);
+            socket.emit("offer", {
+              offer: peerConnection.localDescription,
+              to: peerId,
+            });
+          })
+          .catch((error) => {
+            console.error("Error creating offer:", error);
+          });
+      };
+
+      // Fonction pour gérer une offre
+      const handleOffer = (data) => {
+        const peerConnection = new RTCPeerConnection();
+
+        // Ajouter le flux local uniquement ici
+        localStream
+          .getTracks()
+          .forEach((track) => peerConnection.addTrack(track, localStream));
+
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log("Sending candidate to:", data.from);
+            socket.emit("candidate", {
+              candidate: event.candidate,
+              to: data.from,
+            });
+          }
+        };
+
+        peerConnection.ontrack = (event) => {
+          // Vérifier si la vidéo existe déjà pour éviter les doublons
+          if (!document.getElementById(data.from)) {
+            const remoteVideo = document.createElement("video");
+            remoteVideo.srcObject = event.streams[0];
+            remoteVideo.autoplay = true;
+            remoteVideo.id = data.from; // ID unique pour chaque vidéo
+            videosContainer.appendChild(remoteVideo);
+          }
+        };
+
+        peerConnection
+          .setRemoteDescription(new RTCSessionDescription(data.offer))
+          .then(() => {
+            return peerConnection.createAnswer();
+          })
+          .then((answer) => {
+            return peerConnection.setLocalDescription(answer);
+          })
+          .then(() => {
+            socket.emit("answer", {
+              answer: peerConnection.localDescription,
+              to: data.from,
+            });
+          })
+          .catch((error) => {
+            console.error("Error handling offer:", error);
+          });
+      };
+
+      // Fonction pour gérer une réponse
+      const handleAnswer = (data) => {
+        const peerConnection = peers[data.from];
+        if (peerConnection) {
+          peerConnection
+            .setRemoteDescription(new RTCSessionDescription(data.answer))
+            .catch((error) => {
+              console.error("Error setting remote description:", error);
+            });
+        }
+      };
+
+      // Fonction pour gérer un candidat ICE
+      const handleCandidate = (data) => {
+        const peerConnection = peers[data.from];
+        if (peerConnection) {
+          peerConnection
+            .addIceCandidate(new RTCIceCandidate(data.candidate))
+            .catch((error) => {
+              console.error("Error adding received ICE candidate:", error);
+            });
+        }
+      };
+
+      document.getElementById("startCall").onclick = startCall;
+    </script>
+  </body>
+</html>
