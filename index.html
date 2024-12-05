@@ -95,15 +95,7 @@
       // Fonction pour créer une connexion avec un autre pair
       const createPeerConnection = (peerId) => {
         console.log("Creating peer connection with:", peerId);
-        const peerConnection = new RTCPeerConnection({
-          iceServers:
-            process.env.NODE_ENV === "production"
-              ? [
-                  { urls: "stun:stun1.l.google.com:19302" },
-                  { urls: "stun:stun2.l.google.com:19302" },
-                ]
-              : [],
-        });
+        const peerConnection = new RTCPeerConnection();
 
         // Ajouter le flux local
         localStream
@@ -153,15 +145,7 @@
 
       // Fonction pour gérer une offre
       const handleOffer = (data) => {
-        const peerConnection = new RTCPeerConnection({
-          iceServers:
-            process.env.NODE_ENV === "production"
-              ? [
-                  { urls: "stun:stun1.l.google.com:19302" },
-                  { urls: "stun:stun2.l.google.com:19302" },
-                ]
-              : [],
-        });
+        const peerConnection = new RTCPeerConnection();
 
         // Ajouter le flux local uniquement ici
         localStream
